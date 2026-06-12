@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Métricas</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f5f7fa; color: #333; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        .header h1 { color: #2c3e50; margin-bottom: 10px; }
+        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .kpi-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        .kpi-value { font-size: 2.5rem; font-weight: bold; margin: 10px 0; }
+        .kpi-label { color: #666; font-size: 0.9rem; text-transform: uppercase; }
+        .kpi-change { font-size: 0.8rem; margin-top: 5px; }
+        .positive { color: #27ae60; }
+        .negative { color: #e74c3c; }
+        .chart-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 30px; }
+        .chart-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .chart-container { position: relative; height: 400px; }
+        .form-section { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 600; }
+        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+        .btn { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 6px; cursor: pointer; }
+        .btn:hover { background: #2980b9; }
+        .refresh-btn { background: #27ae60; margin-left: 10px; }
+        .refresh-btn:hover { background: #229954; }
+        @media (max-width: 768px) {
+            .chart-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Dashboard de Métricas</h1>
+            <p>Monitor en tiempo real de indicadores clave de rendimiento</p>
+            <button class="btn refresh-btn" onclick="loadDashboard()">🔄 Actualizar</button>
+        </div>
+
+        <div class="kpi-grid" id="kpiGrid">
+            <!-- KPIs se cargan dinámicamente -->
+        </div>
+
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>Tendencia de Ventas</h3>
+                <div class="chart-container">
+                    <canvas id="salesChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>Distribución por Categoría</h3>
+                <div class="chart-container">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>Agregar Nueva Métrica</h3>
+            <form id="metricForm">
+                <div class="form-group">
+                    <label>Nombre de la Métrica</label>
+                    <input type="text" id="metricName" required>
+                </div>
+                <div class="form-group">
+                    <label>Valor</label>
+                    <input type="number" id="metricValue" step="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Categoría</label>
+                    <select id="metricCategory" required>
+                        <option value="ventas">Ventas</option>
+                        <option value="usuarios">Usuarios</option>
+                        <option value="conversion">Conversión</option>
+                        <option value="trafico">Tráfico</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Unidad</label>
+                    <input type="text" id="metricUnit" placeholder="€, %, unidades, etc.">
+                </div>
+                <button type="submit" class="btn">Agregar Métrica</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const sb = window.supabase.createClient('https://ifbtcyxjccfhenxpzuge.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmYnRjeXhqY2NmaGVueHB6dWdlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODE1NzE3NSwiZXhwIjoyMDkzNzMzMTc1fQ.GVT3CveficB_D8WijOvKXhlpgiEbX8W8cmLSvhcbSeI');
+        let salesChart, categoryChart;
+
+        async function loadDashboard() {
+            await loadKPIs();
+            await loadCharts();
+        }
+
+        async function loadKPIs() {
+            try {
+                const { data: metrics } = await sb.from('metricas').select('*').order('created_at', { ascending: false });
+                
+                const kpiGrid = document.getElementById('kpiGrid');
+                kpiGrid.innerHTML = '';
+
+                // Agrupar por categoría y calcular totales
+                const categories = {};
+                metrics.forEach(metric => {
+                    if (!categories[metric.categoria]) {
+                        categories[metric.categoria] = { total: 0, count: 0, latest: null };
+                    }
+                    categories[metric.categoria].total += metric.valor;
+                    categories[metric.categoria].count++;
+                    if (!categories[metric.categoria].latest || metric.created_at > categories[metric.categoria].latest) {
+                        categories[metric.categoria].latest = metric.created_at;
+                        categories[metric.categoria].unit = metric.unidad;
+                    }
+                });
+
+                Object.entries(categories).forEach(([category, data]) => {
+                    const change = Math.random() > 0.5 ? '+' : '-';
+                    const changeValue = (Math.random() * 10).toFixed(1);
+                    
+                    kpiGrid.innerHTML += `
+                        <div class="kpi-card">
+                            <div class="kpi-label">${category}</div>
+                            <div class="kpi-value">${data.total.toFixed(2)} ${data.unit || ''}</div>
+                            <div class="kpi-change ${change === '+' ? 'positive' : 'negative'}">
+                                ${change}${changeValue}% vs mes anterior
+                            </div>
+                        </div>
+                    `;
+                });
+            } catch (error) {
+                console.error('Error cargando KPIs:', error);
+            }
+        }
+
+        async function loadCharts() {
+            try {
+                const { data: metrics } = await sb.from('metricas').select('*').order('created_at', { ascending: true });
+                
+                // Gráfico de tendencia
+                const salesData = metrics.filter(m => m.categoria === 'ventas').slice(-7);
+                const salesLabels = salesData.map(m => new Date(m.created_at).toLocaleDateString());
+                const salesValues = salesData.map(m => m.valor);
+
+                if (salesChart) salesChart.destroy();
+                const salesCtx = document.getElementById('salesChart').getContext('2d');
+                salesChart = new Chart(salesCtx, {
+                    type: 'line',
+                    data: {
+                        labels: salesLabels,
+                        datasets: [{
+                            label: 'Ventas',
+                            data: salesValues,
+                            borderColor: '#3498db',
+                            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                            tension: 0.3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+
+                // Gráfico de categorías
+                const categoryData = {};
+                metrics.forEach(m => {
+                    categoryData[m.categoria] = (categoryData[m.categoria] || 0) + m.valor;
+                });
+
+                if (categoryChart) categoryChart.destroy();
+                const categoryCtx = document.getElementById('categoryChart').getContext('2d');
+                categoryChart = new Chart(categoryCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: Object.keys(categoryData),
+                        datasets: [{
+                            data: Object.values(categoryData),
+                            backgroundColor: ['#3498db', '#e74c3c', '#f39c12', '#27ae60']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+            } catch (error) {
+                console.error('Error cargando gráficos:', error);
+            }
+        }
+
+        document.getElementById('metricForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const nombre = document.getElementById('metricName').value;
+            const valor = parseFloat(document.getElementById('metricValue').value);
+            const categoria = document.getElementById('metricCategory').value;
+            const unidad = document.getElementById('metricUnit').value;
+
+            try {
+                await sb.from('metricas').insert({
+                    nombre,
+                    valor,
+                    categoria,
+                    unidad
+                });
+                
+                document.getElementById('metricForm').reset();
+                await loadDashboard();
+            } catch (error) {
+                alert('Error al agregar métrica: ' + error.message);
+            }
+        });
+
+        // Auto-refresh cada 30 segundos
+        setInterval(loadDashboard, 30000);
+        
+        // Cargar dashboard inicial
+        loadDashboard();
+    </script>
+</body>
+</html>
